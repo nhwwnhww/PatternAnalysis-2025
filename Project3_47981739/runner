@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --gres=gpu:a100
+#SBATCH --job-name=torch_test
+#SBATCH -o torch_test.out
+conda activate torch
+python train.py --data_root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data --out_dir ./runs/hipmri2d_unet --epochs 1 --batch 8 --classes 6
