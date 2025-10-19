@@ -5,36 +5,60 @@ import nibabel as nib
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
+
 
 def _load_nii(path):
+    """Load a NIfTI file as a 2D float32 numpy array."""
     img = nib.load(path).get_fdata(caching='unchanged')
-    if img.ndim == 3:  # (H,W,1)
-        img = img[:,:,0]
+    if img.ndim == 3:  # (H, W, 1)
+        img = img[:, :, 0]
     return img.astype(np.float32)
+
 
 class HipMRI2DNIIDataset(Dataset):
     """
-    期望目录结构（Rangpur/本地）：
+    Expects directory structure:
     root/
-      images/ *.nii or *.nii.gz
-      labels/ *.nii or *.nii.gz
-    文件名需一一对应（同名）。
+        images/ *.nii or *.nii.gz
+        labels/ *.nii or *.nii.gz
+    Filenames must match between images and labels.
     """
+
     def __init__(self, root, image_dir='images', label_dir='labels',
                  norm='zscore', augment=False, classes=5):
-        self.ipaths = sorted(glob.glob(os.path.join(root, image_dir, '*.nii*')))
-        self.lpaths = [os.path.join(root, label_dir, os.path.basename(p)) for p in self.ipaths]
-        self.norm   = norm
-        self.aug    = augment
-        self.classes = classes
-        assert len(self.ipaths) == len(self.lpaths) and len(self.ipaths) > 0, "Empty or mismatched dataset."
+        # auto-detect keras_slices_train / keras_slices_seg_train
+        if os.path.exists(os.path.join(root, 'keras_slices_train')):
+            image_dir = 'keras_slices_train'
+        if os.path.exists(os.path.join(root, 'keras_slices_seg_train')):
+            label_dir = 'keras_slices_seg_train'
 
-    def __len__(self): return len(self.ipaths)
+        self.ipaths = sorted(glob.glob(os.path.join(root, image_dir, '*.nii*')))
+        self.lpaths = sorted(glob.glob(os.path.join(root, label_dir, '*.nii*')))
+
+        assert len(self.ipaths) == len(self.lpaths) and len(self.ipaths) > 0, \
+            f"Empty or mismatched dataset: {len(self.ipaths)} images, {len(self.lpaths)} labels"
+
+        self.norm = norm
+        self.aug = augment
+        self.classes = classes
+
+        # automatically detect max H and W for resizing
+        max_h, max_w = 0, 0
+        for ipath in self.ipaths:
+            img = _load_nii(ipath)
+            h, w = img.shape
+            max_h = max(max_h, h)
+            max_w = max(max_w, w)
+        self.target_size = (max_h, max_w)
+
+    def __len__(self):
+        return len(self.ipaths)
 
     def __getitem__(self, idx):
         ipath, lpath = self.ipaths[idx], self.lpaths[idx]
-        img  = _load_nii(ipath)   # (H,W)
-        mask = _load_nii(lpath)   # (H,W), integer labels [0..C-1]
+        img = _load_nii(ipath)   # (H, W)
+        mask = _load_nii(lpath)  # (H, W), integer labels [0..C-1]
 
         # normalize
         if self.norm == 'zscore':
@@ -44,14 +68,25 @@ class HipMRI2DNIIDataset(Dataset):
             mn, mx = np.percentile(img, 1), np.percentile(img, 99)
             img = np.clip((img - mn) / (mx - mn + 1e-6), 0, 1)
 
-        img  = torch.from_numpy(img).unsqueeze(0)     # (1,H,W)
-        mask = torch.from_numpy(mask).long()          # (H,W)
+        # convert to torch
+        img = torch.from_numpy(img).unsqueeze(0)  # (1,H,W)
+        mask = torch.from_numpy(mask).long()      # (H,W)
 
-        # simple aug
+        # resize / pad to target size
+        target_h, target_w = self.target_size
+        img = F.interpolate(img.unsqueeze(0), size=(target_h, target_w),
+                            mode='bilinear', align_corners=False).squeeze(0)
+        mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(),
+                             size=(target_h, target_w), mode='nearest').squeeze(0).long()
+
+        # simple augmentation
         if self.aug:
             if torch.rand(1).item() < 0.5:
-                img  = TF.hflip(img);  mask = TF.hflip(mask.unsqueeze(0)).squeeze(0)
+                img = TF.hflip(img)
+                mask = TF.hflip(mask.unsqueeze(0)).squeeze(0)
             if torch.rand(1).item() < 0.5:
-                img  = TF.vflip(img);  mask = TF.vflip(mask.unsqueeze(0)).squeeze(0)
+                img = TF.vflip(img)
+                mask = TF.vflip(mask.unsqueeze(0)).squeeze(0)
 
         return img, mask, os.path.basename(ipath)
+
