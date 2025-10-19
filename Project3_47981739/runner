@@ -6,4 +6,4 @@
 #SBATCH --job-name=torch_test
 #SBATCH -o torch_test.out
 conda activate torch
-python train.py --data_root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data --out_dir ./runs/hipmri2d_unet --epochs 60 --batch 8 --classes 6
+python train.py --data_root /home/groups/comp3710/HipMRI_Study_open/keras_slices_data --out_dir ./runs/hipmri2d_unet --epochs 1 --batch 8 --classes 6

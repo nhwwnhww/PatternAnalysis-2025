@@ -43,7 +43,7 @@ class HipMRI2DNIIDataset(Dataset):
         self.aug = augment
         self.classes = classes
 
-        # automatically detect max H and W for resizing
+        # automatically detect max H and W for padding
         max_h, max_w = 0, 0
         for ipath in self.ipaths:
             img = _load_nii(ipath)
@@ -72,12 +72,16 @@ class HipMRI2DNIIDataset(Dataset):
         img = torch.from_numpy(img).unsqueeze(0)  # (1,H,W)
         mask = torch.from_numpy(mask).long()      # (H,W)
 
-        # resize / pad to target size
         target_h, target_w = self.target_size
+
+        # resize image via interpolate
         img = F.interpolate(img.unsqueeze(0), size=(target_h, target_w),
                             mode='bilinear', align_corners=False).squeeze(0)
-        mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0).float(),
-                             size=(target_h, target_w), mode='nearest').squeeze(0).long()
+
+        # pad mask to target size (safe for integer labels)
+        pad_h = target_h - mask.shape[0]
+        pad_w = target_w - mask.shape[1]
+        mask = F.pad(mask, (0, pad_w, 0, pad_h), value=0)
 
         # simple augmentation
         if self.aug:
