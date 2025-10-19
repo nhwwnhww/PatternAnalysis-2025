@@ -17,6 +17,8 @@ Spec refs: Project description & difficulty notes; required files list.
 - Labels: `D:\COMP3710\HipMRI_Study_open/semantic_labels_only`
 
 ## Train
+
+### bin
 ```
 python train.py 
   --data_root "D:\COMP3710\HipMRI_Study_open" 
@@ -32,20 +34,6 @@ python train.py
 ```
 
 ## Predict (single volume)
-```
-python predict.py 
-  --image "D:\COMP3710\HipMRI_Study_open\semantic_MRs\B006_Week0_LFOV.nii.gz" 
-  --weights ".\runs\hipmri3d_unet_bin\best.pt" 
-  --out_dir ".\pred3d_vis" 
-  --label_root "D:\COMP3710\HipMRI_Study_open" 
-  --label_dir "semantic_labels_only" 
-  --metrics_csv 
-  --grid 
-  --tta 
-  --postprocess_lcc 
-  --save_nii 
-  --prob --prob_class 5
-```
 
 ### bin
 ```
