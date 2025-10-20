@@ -9,29 +9,29 @@ Spec refs: Project description & difficulty notes; required files list.
 
 
 ## Data (Rangpur)
-- Images: `/home/groups/comp3710/HipMRI_Study_open/semantic_MRs`
-- Labels: `/home/groups/comp3710/HipMRI_Study_open/semantic_labels_only`
+- Root: `/home/groups/comp3710/HipMRI_Study_open`
 
 ## Data (Local)
-- Images: `D:\COMP3710\HipMRI_Study_open/semantic_MRs`
-- Labels: `D:\COMP3710\HipMRI_Study_open/semantic_labels_only`
+- Root: `D:\COMP3710\HipMRI_Study_open`
 
 ## Train
 
 ### bin
 ```
 python train.py 
-  --data_root "D:\COMP3710\HipMRI_Study_open" 
+  --data_root "/home/groups/comp3710/HipMRI_Study_open" 
   --image_dir "semantic_MRs" 
   --label_dir "semantic_labels_only" 
   --out_dir ".\runs\hipmri3d_unet_bin" 
-  --epochs 10 
+  --epochs 1
   --batch 1 
   --patch 96,160,160 
   --binary_prostate 
   --prostate_label 5 
   --classwise
 ```
+
+`python /home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet/train.py --data_root "/home/groups/comp3710/HipMRI_Study_open" --image_dir "semantic_MRs" --label_dir "semantic_labels_only" --out_dir "/home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet\runs\hipmri3d_unet_bin" --epochs 50 --50 --batch 1 --patch 96,160,160 --binary_prostate --prostate_label 5 --classwise`
 
 ## Predict (single volume)
 
@@ -47,3 +47,14 @@ python predict.py
   --metrics_csv --grid --tta --postprocess_lcc --save_nii
   --prob 
 ```
+`
+python /home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet/predict.py 
+  --image "/home/groups/comp3710/HipMRI_Study_open/semantic_MRs/B006_Week0_LFOV.nii.gz" 
+  --weights "/home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet/runs/hipmri3d_unet_bin/best.pt" 
+  --out_dir "/home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet/pred3d_vis_bin" 
+  --label_root "/home/groups/comp3710/HipMRI_Study_open" 
+  --label_dir "semantic_labels_only" 
+  --binary_prostate 
+  --metrics_csv --grid --tta --postprocess_lcc --save_nii 
+  --prob
+`
