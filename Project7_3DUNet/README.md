@@ -58,3 +58,15 @@ python /home/Student/s4798173/PatternAnalysis-2025/Project7_3DUNet/predict.py
   --metrics_csv --grid --tta --postprocess_lcc --save_nii 
   --prob
 `
+
+
+`
+python predict.py ^
+  --image "D:\COMP3710\HipMRI_Study_open\semantic_MRs\B006_Week0_LFOV.nii.gz" ^
+  --weights ".\runs\hipmri3d_unet_bin\best.pt" ^
+  --out_dir ".\pred3d_vis_bin" ^
+  --label_root "D:\COMP3710\HipMRI_Study_open" ^
+  --label_dir "semantic_labels_only" ^
+  --binary_prostate --metrics_csv --grid --tta --postprocess_lcc --save_nii --prob
+
+`
