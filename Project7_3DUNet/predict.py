@@ -71,6 +71,59 @@ def save_grid(vol_d, pred_d, out_path, ks):
         ax.axis('off')
     plt.tight_layout(); plt.savefig(out_path); plt.close()
 
+# ====== Sliding-window 推理 (Gaussian 融合) ======
+def sliding_window_predict(model, vol_n, patch=(96,128,128), stride=(48,64,64), device='cuda', sigmoid_mode=False, out_ch=None):
+    from numpy import hanning
+    vol_n = np.ascontiguousarray(vol_n)
+    D,H,W = vol_n.shape
+    C = 1 if sigmoid_mode else (out_ch if out_ch is not None else 2)
+    prob_acc = np.zeros((C, D,H,W), dtype=np.float32)
+    w_acc    = np.zeros((D,H,W), dtype=np.float32)
+
+    # 3D “高斯”权重（边缘小、中心大）
+    ww1 = hanning(patch[0]); ww2 = hanning(patch[1]); ww3 = hanning(patch[2])
+    ww = np.outer(ww1, ww2).reshape(patch[0], patch[1], 1) * ww3.reshape(1,1,patch[2])
+    ww = (ww - ww.min()) / (ww.max() - ww.min() + 1e-6) + 1e-2
+    ww = ww.astype(np.float32)
+
+    for z in range(0, max(1, D - patch[0] + 1), stride[0]):
+        for y in range(0, max(1, H - patch[1] + 1), stride[1]):
+            for x in range(0, max(1, W - patch[2] + 1), stride[2]):
+                z1,y1,x1 = z+patch[0], y+patch[1], x+patch[2]
+                sub = vol_n[z:z1, y:y1, x:x1]
+                if sub.shape != patch:  # 边界补零
+                    pad = [(0, patch[i]-sub.shape[i]) for i in range(3)]
+                    sub = np.pad(sub, pad, mode='constant')
+                    wwin= np.pad(ww,  pad, mode='constant')
+                else:
+                    wwin= ww
+                xt = torch.from_numpy(sub[None,None]).to(device).float()
+                with torch.no_grad():
+                    lo = model(xt)
+                    pf = torch.sigmoid(lo) if sigmoid_mode else torch.softmax(lo, dim=1)
+                p = pf.squeeze(0).detach().cpu().numpy()  # (C, dz,dy,dx)
+                dz,dy,dx = min(p.shape[-3], D-z), min(p.shape[-2], H-y), min(p.shape[-1], W-x)
+                prob_acc[:, z:z+dz, y:y+dy, x:x+dx] += p[:, :dz,:dy,:dx] * wwin[:dz,:dy,:dx]
+                w_acc[z:z+dz, y:y+dy, x:x+dx]       += wwin[:dz,:dy,:dx]
+    prob_acc /= (w_acc[None] + 1e-8)
+    return prob_acc  # (C,D,H,W)
+
+# ====== 加强后处理：小连通域滤除 + 闭运算/填洞 ======
+def postprocess_refine(mask, min_size=800, do_close=True):
+    import numpy as np
+    from scipy.ndimage import binary_closing, generate_binary_structure, binary_fill_holes, label
+    cc, n = label(mask)
+    keep = np.zeros_like(mask, dtype=np.uint8)
+    for i in range(1, n+1):
+        sz = int((cc==i).sum())
+        if sz >= min_size:
+            keep[cc==i] = 1
+    if do_close:
+        st = generate_binary_structure(3,2)
+        keep = binary_closing(keep, structure=st, iterations=1).astype(np.uint8)
+        keep = binary_fill_holes(keep, structure=st).astype(np.uint8)
+    return keep
+
 
 # ------------------ DEBUG 工具 ------------------
 def summarize_volume(vol, name, out_dir):
@@ -173,6 +226,12 @@ def main():
 
     ap.add_argument('--softmax_thr', type=float, default=-1.0,
                 help='二分类softmax时用概率阈值而不是argmax；>=0生效，例如 0.3')
+    
+        # 滑窗推理参数
+    ap.add_argument('--sw_enable', action='store_true', help='启用滑窗推理')
+    ap.add_argument('--sw_patch', default='96,128,128', help='滑窗 patch, 例如 96,128,128')
+    ap.add_argument('--sw_stride', default='48,64,64', help='滑窗 stride, 例如 48,64,64')
+
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -223,54 +282,76 @@ def main():
     print(f"[Info] head_out_ch(from_ckpt)={head_out_ch}, n_classes(param)={n_classes}")
 
     model = UNet3D_Improved(in_ch=1, n_classes=n_classes).to(device).eval()
+    model.n_classes = n_classes  # 便于滑窗函数获知通道数
     model.load_state_dict(ckpt['model'])
     model = model.to(device).float()
 
     # 判定是否走“sigmoid 单通道二分类”路径
     sigmoid_mode = args.force_sigmoid or (head_out_ch == 1) or (n_classes == 1)
 
-    # ---- 推理（TTA 可选）----
+     # ---- 推理（滑窗/整卷 + (可选)TTA）----
     with torch.no_grad():
-        if not args.tta:
-            logits = model(x)  # (1,C,D,H,W)
-            if sigmoid_mode:
-                probs = torch.sigmoid(logits).cpu()     # (1,1,D,H,W)
-            else:
-                probs = torch.softmax(logits, dim=1).cpu()
-        else:
-            flips = [(), (2,), (3,), (4,), (2,3), (2,4), (3,4), (2,3,4)]
-            acc = None
-            for f in flips:
-                xf = torch.flip(x, dims=f) if f else x
-                lo = model(xf)
-                pf = torch.sigmoid(lo) if sigmoid_mode else torch.softmax(lo, dim=1)
-                pf = torch.flip(pf, dims=f) if f else pf
-                acc = pf if acc is None else (acc + pf)
-            probs = (acc / len(flips)).cpu()
+        if args.sw_enable:
+            patch  = tuple(int(v) for v in args.sw_patch.split(','))
+            stride = tuple(int(v) for v in args.sw_stride.split(','))
 
-        if sigmoid_mode:
+            def _predict_sw(vol_np):
+                return sliding_window_predict(
+                    model, vol_np, patch=patch, stride=stride,
+                    device=device, sigmoid_mode=( (head_out_ch==1) or (n_classes==1) ),
+                    out_ch=n_classes
+                )  # (C,D,H,W)
+
+            if not args.tta:
+                P = _predict_sw(vol_n)  # (C,D,H,W)
+            else:
+                flips = [(), (0,), (1,), (2,), (0,1), (0,2), (1,2), (0,1,2)]
+                acc = None
+                for f in flips:
+                    vn = (np.flip(vol_n, axis=f).copy()) if f else np.ascontiguousarray(vol_n)
+                    Pf = _predict_sw(vn)
+                    Pf = np.flip(Pf, axis=tuple([1+a for a in f])) if f else Pf  # C + DHW(1,2,3)->(flip axes +1)
+                    acc = Pf if acc is None else (acc + Pf)
+                P = acc / len(flips)
+            # 归一成 probs 张量，与原逻辑保持一致接口
+            probs = torch.from_numpy(P[None])  # (1,C,D,H,W)
+
+        else:
+            # 原整卷推理（含可选 TTA）
+            if not args.tta:
+                logits = model(x)  # (1,C,D,H,W)
+                probs = torch.sigmoid(logits).cpu() if (head_out_ch==1 or n_classes==1) \
+                        else torch.softmax(logits, dim=1).cpu()
+            else:
+                flips = [(), (2,), (3,), (4,), (2,3), (2,4), (3,4), (2,3,4)]
+                acc = None
+                for f in flips:
+                    xf = torch.flip(x, dims=f) if f else x
+                    lo = model(xf)
+                    pf = torch.sigmoid(lo) if (head_out_ch==1 or n_classes==1) else torch.softmax(lo, dim=1)
+                    pf = torch.flip(pf, dims=f) if f else pf
+                    acc = pf if acc is None else (acc + pf)
+                probs = (acc / len(flips)).cpu()
+
+        # 概率 -> 预测
+        if (head_out_ch==1) or (n_classes==1):
             prob_fg = probs[0, 0].numpy()
             pred_bin = (prob_fg > args.thr).astype(np.uint8)
             pred_mc = pred_bin.copy()
         else:
-            # 二分类softmax：可选阈值二值化
             if (probs.shape[1] == 2) and (args.softmax_thr >= 0):
-                prob_fg = probs[0, 1].numpy()                # 通道1是前景
+                prob_fg = probs[0, 1].numpy()
                 pred_bin = (prob_fg > args.softmax_thr).astype(np.uint8)
-                pred_mc = pred_bin.copy()                    # 下游统一走 pred_mc
+                pred_mc = pred_bin.copy()
             else:
                 pred_mc = torch.argmax(probs, dim=1).squeeze(0).numpy()
-        # 调试：看每个通道的概率分布 & argmax占比
-        if probs.ndim == 5:  # (1,C,D,H,W)
-            P = probs.squeeze(0).numpy()  # (C,D,H,W)
-            ch_stats = []
-            for c in range(P.shape[0]):
-                ch = P[c]
-                ch_stats.append((
-                    c, float(ch.min()), float(ch.max()), float(ch.mean())
-                ))
+
+        # 调试输出
+        if probs.ndim == 5:
+            P = probs.squeeze(0).numpy()
+            ch_stats = [(c, float(P[c].min()), float(P[c].max()), float(P[c].mean())) for c in range(P.shape[0])]
             print("[Debug] per-channel prob stats: (c, min, max, mean) ->", ch_stats)
-            am = np.argmax(P, axis=0)            # (D,H,W)
+            am = np.argmax(P, axis=0)
             vals, cnts = np.unique(am, return_counts=True)
             print("[Debug] argmax histogram:", dict(zip([int(v) for v in vals], [int(x) for x in cnts])))
 
@@ -283,6 +364,7 @@ def main():
             pred = (pred_mc == prostate_id).astype(np.uint8)
         if args.postprocess_lcc:
             pred = keep_largest_cc(pred)
+        pred = postprocess_refine(pred, min_size=800, do_close=True)
     else:
         pred = pred_mc.copy()
         if args.postprocess_lcc and (not sigmoid_mode):
