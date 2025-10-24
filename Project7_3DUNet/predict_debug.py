@@ -211,11 +211,15 @@ def main():
     ckpt = torch.load(args.weights, map_location=device, weights_only=False)
     meta = ckpt.get('meta', {})
     eff_classes = meta.get('effective_classes', meta.get('classes'))
-    n_classes = args.classes if args.classes is not None else (eff_classes if eff_classes is not None else 6)
 
-    # 从权重里猜“最后一层通道数”
+    n_classes = args.classes if args.classes is not None else (eff_classes if eff_classes is not None else 6)
     final_w = ckpt['model'].get('final_conv.weight', None)
     head_out_ch = int(final_w.shape[0]) if final_w is not None else n_classes
+
+    # 防止“权重通道数 ≠ 传参 n_classes”的静默错配
+    if head_out_ch != n_classes:
+        print(f"[WARN] n_classes({n_classes}) != head_out_ch({head_out_ch}); override to head_out_ch")
+        n_classes = head_out_ch
     print(f"[Info] head_out_ch(from_ckpt)={head_out_ch}, n_classes(param)={n_classes}")
 
     model = UNet3D_Improved(in_ch=1, n_classes=n_classes).to(device).eval()
@@ -256,6 +260,19 @@ def main():
                 pred_mc = pred_bin.copy()                    # 下游统一走 pred_mc
             else:
                 pred_mc = torch.argmax(probs, dim=1).squeeze(0).numpy()
+        # 调试：看每个通道的概率分布 & argmax占比
+        if probs.ndim == 5:  # (1,C,D,H,W)
+            P = probs.squeeze(0).numpy()  # (C,D,H,W)
+            ch_stats = []
+            for c in range(P.shape[0]):
+                ch = P[c]
+                ch_stats.append((
+                    c, float(ch.min()), float(ch.max()), float(ch.mean())
+                ))
+            print("[Debug] per-channel prob stats: (c, min, max, mean) ->", ch_stats)
+            am = np.argmax(P, axis=0)            # (D,H,W)
+            vals, cnts = np.unique(am, return_counts=True)
+            print("[Debug] argmax histogram:", dict(zip([int(v) for v in vals], [int(x) for x in cnts])))
 
     # ---- 二分类/后处理 ----
     if args.binary_prostate:
