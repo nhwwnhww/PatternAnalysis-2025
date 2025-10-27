@@ -162,18 +162,21 @@ def bbox_3d(mask):
     x0, x1 = int(np.min(idx[2])), int(np.max(idx[2])) + 1
     return (z0, z1, y0, y1, x0, x1)
 
-def save_overlay(vol, mask, prob=None, out_path=None, k=None, title=""):
+def save_overlay(vol, mask, prob=None, out_path=None, k=None, title="", thr_vis=0.5):
     """单切片覆盖：原图 + 预测边缘 + (可选)概率热力图"""
     D = vol.shape[0]
     k = D//2 if k is None else int(np.clip(k, 0, D-1))
-    fig, ax = plt.subplots(1, 2 if prob is None else 3, figsize=(10,4))
+    ncols = 1 if prob is None else 3
+    fig, ax = plt.subplots(1, ncols, figsize=(5*ncols, 4))
     ax0 = ax[0] if isinstance(ax, (list, np.ndarray)) else ax
     ax0.imshow(edges2(vol[k], mask[k])); ax0.set_title(f"overlay k={k}"); ax0.axis('off')
     if prob is not None:
-        ax1 = ax[1]; ax1.imshow(vol[k], cmap='gray'); im=ax1.imshow(prob[k], cmap='hot', alpha=0.5)
+        ax1 = ax[1]; ax1.imshow(vol[k], cmap='gray'); im = ax1.imshow(prob[k], cmap='hot', alpha=0.5)
         ax1.set_title("prob heat"); ax1.axis('off'); plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
-        ax2 = ax[2]; ax2.imshow(edges2(vol[k], (prob[k] > 0.5).astype(np.uint8)))
-        ax2.set_title("prob>0.5 edge"); ax2.axis('off')
+
+        ax2 = ax[2]
+        ax2.imshow(edges2(vol[k], (prob[k] > thr_vis).astype(np.uint8)))
+        ax2.set_title(f"prob>{thr_vis} edge"); ax2.axis('off')
     if title: fig.suptitle(title)
     plt.tight_layout()
     if out_path: plt.savefig(out_path)
@@ -456,15 +459,36 @@ def main():
                 else:
                     pc = 1 if n_classes == 2 else args.prostate_label
                     prob = probs[0, int(pc)].numpy()
+
+                # === 选一层来可视化：优先用“预测的最大连通域”的中心切片，其次用GT中心，最后用中间层 ===
+                D = vol_n.shape[0]
+
+                # 用一个“宽松阈值”的预测来找包围盒，尽量覆盖住器官
+                base_thr = args.softmax_thr if args.softmax_thr >= 0 else 0.2
+                cand = (prob > base_thr).astype(np.uint8)
+                if args.postprocess_lcc:
+                    cand = keep_largest_cc(cand)
+
+                bb = bbox_3d(cand)              # 先看预测有没有盒
+                if bb is None:                  # 预测没有的话，退而求其次用GT
+                    bb = bbox_3d(gt_bin)
+
+                k_center = int(np.clip(((bb[0] + bb[1]) // 2) if bb else (D // 2), 0, D - 1))
+                # =====================================================================
+
                 for t in thresholds:
                     m = (prob > t).astype(np.uint8)
                     if args.postprocess_lcc: m = keep_largest_cc(m)
                     num = 2.0 * np.sum((m == 1) & (gt_bin == 1))
                     den = np.sum(m == 1) + np.sum(gt_bin == 1) + 1e-6
                     debug_dice[f"thr@{t}"] = float(num/den)
-                    save_overlay(vol_n, m, prob=None,
-                                 out_path=os.path.join(args.out_dir, f"{stem}_debug_thr_{t}.png"),
-                                 title=f"thr={t}")
+                    save_overlay(
+                        vol_n, m, prob=prob,
+                        out_path=os.path.join(args.out_dir, f"{stem}_debug_thr_{t}.png"),
+                        title=f"thr={t}",
+                        thr_vis=t,            # <- 当前阈值
+                        k=k_center            # <- 用包围盒中心层，可按我上一条消息添加 k_center 的计算
+                    )
                 result['dice_threshold_sweep'] = debug_dice
                 print("[Debug] Dice by thresholds:", debug_dice)
             except Exception:
