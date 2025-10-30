@@ -1,0 +1,13 @@
+# Core
+torch>=2.1
+numpy>=1.24
+
+# Medical imaging I/O
+nibabel>=5.1
+
+# Numerical & morphology ops used in post-processing
+scipy>=1.11
+
+# Training / plotting / progress
+matplotlib>=3.7
+tqdm>=4.66
