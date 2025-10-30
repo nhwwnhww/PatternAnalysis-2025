@@ -1,0 +1,39 @@
+{
+  "weights": "C:\\Users\\nhwen\\OneDrive\\Desktop\\PatternAnalysis-2025\\Project7_3DUNet\\runs\\hipmri3d_unet_bin\\best.pt",
+  "image": "D:\\COMP3710\\HipMRI_Study_open\\semantic_MRs\\B006_Week0_LFOV.nii.gz",
+  "effective_classes": 2,
+  "binary_mode": true,
+  "sigmoid_mode": false,
+  "prostate_label": 5,
+  "slices": [
+    42,
+    64,
+    85
+  ],
+  "out_dir": "C:\\Users\\nhwen\\OneDrive\\Desktop\\PatternAnalysis-2025\\Project7_3DUNet\\Predict_Batch",
+  "dice_binary_prostate": 0.7376661409812082,
+  "dice_threshold_sweep": {
+    "thr@0.2": 0.7361048350239434,
+    "thr@0.3": 0.683278767995436,
+    "thr@0.4": 0.6417891373391827,
+    "thr@0.5": 0.35085777529046897
+  },
+  "gt_positive_voxels": 10198,
+  "pred_positive_voxels": 7558,
+  "gt_bbox": [
+    69,
+    95,
+    111,
+    147,
+    114,
+    140
+  ],
+  "pred_bbox": [
+    69,
+    96,
+    116,
+    142,
+    117,
+    138
+  ]
+}
